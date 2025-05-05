@@ -9,14 +9,14 @@ import SwiftUI
 
 @main
 struct ImageViewerApp: App {
+    @StateObject private var resourceManager = SecurityScopedResourceManager.shared
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .onDisappear {
-                    // Ensure we clean up any security-scoped resources
-                    if let bookmarkedURL = FolderBookmarkManager.loadBookmarkedURL() {
-                        bookmarkedURL.stopAccessingSecurityScopedResource()
-                    }
+                    // Clean up resources when app is closing
+                    resourceManager.stopAccessingCurrentFolder()
                 }
         }
     }

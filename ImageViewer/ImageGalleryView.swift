@@ -2,14 +2,15 @@ import SwiftUI
 
 struct ImageGalleryView: View {
     let folderURL: URL
-    @State private var images: [ImageItem] = []
-    @State private var isLoading = true
+    @State private var imageUrls: [URL] = []
+    @State private var isLoadingFileList = true
+    @StateObject private var resourceManager = SecurityScopedResourceManager.shared
     
     var body: some View {
         Group {
-            if isLoading {
-                ProgressView("Loading images...")
-            } else if images.isEmpty {
+            if isLoadingFileList {
+                ProgressView("Finding images...")
+            } else if imageUrls.isEmpty {
                 ContentUnavailableView(
                     "No Images Found",
                     systemImage: "photo.on.rectangle.angled",
@@ -18,8 +19,11 @@ struct ImageGalleryView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        ForEach(images) { image in
-                            VerticalImageItemView(image: image)
+                        ForEach(imageUrls, id: \.self) { imageUrl in
+                            NavigationLink(destination: ImageDetailView(imageUrl: imageUrl)) {
+                                ProgressiveImageView(imageUrl: imageUrl)
+                            }
+                            .buttonStyle(PlainButtonStyle()) // Removes default navigation styling
                         }
                     }
                 }
@@ -28,20 +32,15 @@ struct ImageGalleryView: View {
         .navigationTitle("Images")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            await loadImages()
+            await loadImageUrls()
         }
     }
     
-    private func loadImages() async {
-        isLoading = true
-        defer { isLoading = false }
+    private func loadImageUrls() async {
+        isLoadingFileList = true
+        defer { isLoadingFileList = false }
         
-        // Make sure we can access the security-scoped resource
-        guard folderURL.startAccessingSecurityScopedResource() else {
-            print("Failed to access the folder")
-            return
-        }
-        defer { folderURL.stopAccessingSecurityScopedResource() }
+        // We're using the shared resource manager now, so we don't need to start/stop access here
         
         do {
             // List all files in the directory
@@ -58,53 +57,63 @@ struct ImageGalleryView: View {
                 return supportedImageExtensions.contains(fileExtension)
             }.sorted { $0.lastPathComponent < $1.lastPathComponent }
             
-            // Create image items from file URLs
-            var loadedImages: [ImageItem] = []
-            for (index, fileURL) in imageFiles.enumerated() {
-                guard let imageData = try? Data(contentsOf: fileURL),
-                      let uiImage = UIImage(data: imageData) else {
-                    continue
-                }
-                
-                loadedImages.append(ImageItem(
-                    id: index,
-                    url: fileURL,
-                    image: Image(uiImage: uiImage)
-                ))
-            }
-            
             await MainActor.run {
-                self.images = loadedImages
+                self.imageUrls = imageFiles
             }
-            
         } catch {
-            print("Error loading images: \(error.localizedDescription)")
+            print("Error loading image list: \(error.localizedDescription)")
         }
     }
 }
 
-struct ImageItem: Identifiable {
-    let id: Int
-    let url: URL
-    let image: Image
-}
-
-// New vertical full-width image view
-struct VerticalImageItemView: View {
-    let image: ImageItem
+struct ProgressiveImageView: View {
+    let imageUrl: URL
+    @State private var image: Image? = nil
+    @State private var isLoading = true
     
     var body: some View {
         VStack(spacing: 2) {
-            Text(image.url.lastPathComponent)
+            Text(imageUrl.lastPathComponent)
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 4)
             
-            image.image
-                .resizable()
-                .scaledToFit()
-                .frame(maxWidth: .infinity)
+            if let loadedImage = image {
+                loadedImage
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .aspectRatio(16/9, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .overlay {
+                        ProgressView()
+                    }
+            }
+        }
+        .task {
+            await loadImage()
+        }
+    }
+    
+    private func loadImage() async {
+        isLoading = true
+        do {
+            let imageData = try Data(contentsOf: imageUrl)
+            if let uiImage = UIImage(data: imageData) {
+                await MainActor.run {
+                    self.image = Image(uiImage: uiImage)
+                    self.isLoading = false
+                }
+            }
+        } catch {
+            print("Error loading image at \(imageUrl.lastPathComponent): \(error.localizedDescription)")
+            await MainActor.run {
+                self.isLoading = false
+            }
         }
     }
 }

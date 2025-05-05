@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @State private var isShowingFolderPicker = false
     @State private var selectedFolderURL: URL?
+    @StateObject private var resourceManager = SecurityScopedResourceManager.shared
     
     var body: some View {
         NavigationStack {
@@ -74,17 +75,14 @@ struct ContentView: View {
                 onCompletion: { result in
                     switch result {
                     case .success(let url):
-                        // Start accessing the URL
-                        if url.startAccessingSecurityScopedResource() {
+                        // Use the resource manager to access the URL
+                        if resourceManager.setFolderURL(url) {
                             selectedFolderURL = url
                             
                             // Save bookmark for future access
                             if FolderBookmarkManager.saveBookmark(for: url) {
                                 print("Successfully saved bookmark")
                             }
-                            
-                            // Don't stop accessing here as we'll need it later
-                            // Let the ImageGalleryView handle access
                         }
                     case .failure(let error):
                         print("Error selecting folder: \(error.localizedDescription)")
@@ -94,8 +92,13 @@ struct ContentView: View {
             .onAppear {
                 // Try to load previously selected folder
                 if selectedFolderURL == nil, let bookmarkedURL = FolderBookmarkManager.loadBookmarkedURL() {
-                    selectedFolderURL = bookmarkedURL
+                    if resourceManager.setFolderURL(bookmarkedURL) {
+                        selectedFolderURL = bookmarkedURL
+                    }
                 }
+            }
+            .onDisappear {
+                // No need to stop access here as the manager will handle it
             }
         }
     }
