@@ -12,6 +12,12 @@ struct ImageViewerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onDisappear {
+                    // Ensure we clean up any security-scoped resources
+                    if let bookmarkedURL = FolderBookmarkManager.loadBookmarkedURL() {
+                        bookmarkedURL.stopAccessingSecurityScopedResource()
+                    }
+                }
         }
     }
 }
