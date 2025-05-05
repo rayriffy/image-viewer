@@ -21,11 +21,13 @@ struct ImageGalleryView: View {
                     LazyVStack(spacing: 2) {
                         ForEach(imageUrls, id: \.self) { imageUrl in
                             NavigationLink(destination: ImageDetailView(imageUrl: imageUrl)) {
-                                ProgressiveImageView(imageUrl: imageUrl)
+                                OptimizedImageView(imageUrl: imageUrl)
                             }
                             .buttonStyle(PlainButtonStyle()) // Removes default navigation styling
                         }
                     }
+                    // Disable scroll animations to prevent jumping
+                    .scrollDisableAnimation()
                 }
             }
         }
@@ -46,7 +48,7 @@ struct ImageGalleryView: View {
             // List all files in the directory
             let fileURLs = try FileManager.default.contentsOfDirectory(
                 at: folderURL,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
                 options: [.skipsHiddenFiles]
             )
             
@@ -66,10 +68,14 @@ struct ImageGalleryView: View {
     }
 }
 
-struct ProgressiveImageView: View {
+/// An optimized image view that efficiently loads and displays images
+struct OptimizedImageView: View {
     let imageUrl: URL
-    @State private var image: Image? = nil
+    @State private var image: Image?
     @State private var isLoading = true
+    // Default aspect ratio for placeholders (3:2 is a common photograph ratio)
+    @State private var aspectRatio: CGFloat = 1.5
+    private let imageLoader = ImageLoader()
     
     var body: some View {
         VStack(spacing: 2) {
@@ -79,42 +85,81 @@ struct ProgressiveImageView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 4)
             
-            if let loadedImage = image {
-                loadedImage
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-            } else {
-                Rectangle()
-                    .fill(Color.gray.opacity(0.2))
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .overlay {
-                        ProgressView()
+            // Use a container with fixed dimensions based on screen width
+            GeometryReader { geometry in
+                ZStack {
+                    if let loadedImage = image {
+                        loadedImage
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.2))
+                            .overlay {
+                                ProgressView()
+                            }
                     }
+                }
+                .frame(
+                    width: geometry.size.width,
+                    height: geometry.size.width / aspectRatio
+                )
             }
+            .frame(height: UIScreen.main.bounds.width / aspectRatio)
+            // This fixes the GeometryReader expanding issue
         }
         .task {
-            await loadImage()
+            await loadImageOptimized()
         }
     }
     
-    private func loadImage() async {
+    private func loadImageOptimized() async {
         isLoading = true
-        do {
-            let imageData = try Data(contentsOf: imageUrl)
-            if let uiImage = UIImage(data: imageData) {
+        
+        // Use our actor to load the image on a background thread
+        if let loadedImage = await imageLoader.loadImage(from: imageUrl) {
+            // Also get the aspect ratio from the cache if possible
+            if let cachedImage = ImageCache.shared.getImage(for: imageUrl) {
+                let imageAspect = cachedImage.size.width / cachedImage.size.height
+                
+                // Update the UI on the main thread
                 await MainActor.run {
-                    self.image = Image(uiImage: uiImage)
+                    self.aspectRatio = imageAspect
+                    self.image = loadedImage
+                    self.isLoading = false
+                }
+            } else {
+                await MainActor.run {
+                    self.image = loadedImage
                     self.isLoading = false
                 }
             }
-        } catch {
-            print("Error loading image at \(imageUrl.lastPathComponent): \(error.localizedDescription)")
+        } else {
             await MainActor.run {
                 self.isLoading = false
             }
         }
+    }
+}
+
+// ViewModifier to disable scroll animation
+struct DisableScrollAnimation: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content
+                .scrollDisabled(false)
+                .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
+        } else {
+            content
+        }
+    }
+}
+
+// Extension to add the modifier as a convenient method
+extension View {
+    func scrollDisableAnimation() -> some View {
+        self.modifier(DisableScrollAnimation())
     }
 }
 

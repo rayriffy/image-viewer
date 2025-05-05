@@ -2,13 +2,14 @@ import SwiftUI
 
 struct ImageDetailView: View {
     let imageUrl: URL
-    @State private var image: Image? = nil
+    @State private var image: Image?
     @State private var isLoading = true
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var offset = CGSize.zero
     @State private var lastOffset = CGSize.zero
     @StateObject private var resourceManager = SecurityScopedResourceManager.shared
+    private let imageLoader = ImageLoader()
     
     var body: some View {
         GeometryReader { geometry in
@@ -82,25 +83,20 @@ struct ImageDetailView: View {
             }
         }
         .task {
-            await loadImage()
+            await loadImageOptimized()
         }
     }
     
-    private func loadImage() async {
+    private func loadImageOptimized() async {
         isLoading = true
         
-        // Using the shared resource manager - we don't need to handle URL access here
-        
-        do {
-            let imageData = try Data(contentsOf: imageUrl)
-            if let uiImage = UIImage(data: imageData) {
-                await MainActor.run {
-                    self.image = Image(uiImage: uiImage)
-                    self.isLoading = false
-                }
+        // Check if image is in cache first
+        if let loadedImage = await imageLoader.loadImage(from: imageUrl) {
+            await MainActor.run {
+                self.image = loadedImage
+                self.isLoading = false
             }
-        } catch {
-            print("Error loading image at \(imageUrl.lastPathComponent): \(error.localizedDescription)")
+        } else {
             await MainActor.run {
                 self.isLoading = false
             }
