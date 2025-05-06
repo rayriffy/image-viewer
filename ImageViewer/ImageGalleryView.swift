@@ -1,10 +1,12 @@
 import SwiftUI
 
+#if os(iOS)
 struct ImageGalleryView: View {
     let folderURL: URL
     @State private var imageUrls: [URL] = []
     @State private var isLoadingFileList = true
     @StateObject private var resourceManager = SecurityScopedResourceManager.shared
+    @State private var visibleIndices: Set<Int> = []
     
     var body: some View {
         Group {
@@ -19,9 +21,23 @@ struct ImageGalleryView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        ForEach(imageUrls, id: \.self) { imageUrl in
-                            NavigationLink(destination: ImageDetailView(imageUrl: imageUrl)) {
-                                OptimizedImageView(imageUrl: imageUrl)
+                        ForEach(Array(imageUrls.enumerated()), id: \.element) { index, imageUrl in
+                            NavigationLink(destination: ImageDetailView(imageUrl: imageUrl, allImageUrls: imageUrls, initialIndex: index)) {
+                                OptimizedImageView(imageUrl: imageUrl, index: index, onAppear: { imageIndex in
+                                    // When an image appears in the viewport, trigger preloading
+                                    Task {
+                                        visibleIndices.insert(imageIndex)
+                                        let midVisibleIndex = visibleIndices.sorted().middle ?? imageIndex
+                                        print("👁️ Visible images count: \(visibleIndices.count), Mid index: \(midVisibleIndex)")
+                                        await ImagePreloader.shared.preloadImagesAround(index: midVisibleIndex)
+                                    }
+                                }, onDisappear: { imageIndex in
+                                    visibleIndices.remove(imageIndex)
+                                    // Also remove from preloading queue if it's no longer needed
+                                    Task {
+                                        await ImagePreloader.shared.removeFromQueue(index: imageIndex)
+                                    }
+                                })
                             }
                             .buttonStyle(PlainButtonStyle()) // Removes default navigation styling
                         }
@@ -61,6 +77,11 @@ struct ImageGalleryView: View {
             
             await MainActor.run {
                 self.imageUrls = imageFiles
+                
+                // Initialize the preloader with the image URLs
+                Task {
+                    await ImagePreloader.shared.setImageUrls(imageFiles)
+                }
             }
         } catch {
             print("Error loading image list: \(error.localizedDescription)")
@@ -71,6 +92,10 @@ struct ImageGalleryView: View {
 /// An optimized image view that efficiently loads and displays images
 struct OptimizedImageView: View {
     let imageUrl: URL
+    let index: Int
+    let onAppear: (Int) -> Void
+    let onDisappear: (Int) -> Void
+    
     @State private var image: Image?
     @State private var isLoading = true
     // Default aspect ratio for placeholders (3:2 is a common photograph ratio)
@@ -110,6 +135,12 @@ struct OptimizedImageView: View {
         }
         .task {
             await loadImageOptimized()
+        }
+        .onAppear {
+            onAppear(index)
+        }
+        .onDisappear {
+            onDisappear(index)
         }
     }
     
@@ -163,9 +194,18 @@ extension View {
     }
 }
 
+// Extension to get the middle element of an array
+extension Array {
+    var middle: Element? {
+        guard !isEmpty else { return nil }
+        return self[count / 2]
+    }
+}
+
 #Preview {
     NavigationStack {
         // Mock preview with empty URL
         ImageGalleryView(folderURL: URL(fileURLWithPath: "/tmp"))
     }
-} 
+}
+#endif 
